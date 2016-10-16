@@ -1,0 +1,1426 @@
+PROGRAM ATLAS
+
+USE OMP_LIB
+USE LIBRARY
+USE IONPROBALIB
+
+IMPLICIT NONE
+
+! Variables
+
+INTEGER*8 :: i,j,l,lprime,m,Orbital,SFC_COUNT,TIME_COUNT,L_Coupling,Diff
+INTEGER*8 :: Z,lmin,lmax,mmax,Norb,Ngrid_r,Ngrid_t,Ndiag,Ngrid_time,Ngrid_Omega
+INTEGER*8 :: m_Krylov,m_Taylor,Integration,Mask_Start,NPulses,NbWave
+INTEGER*8 :: NbDensity
+INTEGER*8 :: Finite,Threads,starttime,endtime,measuredtime,MAXTHRD,NTHRD
+REAL*8 :: Radiusmax,Precision,Tmax,Tolerance,Omega_max,Omega_DFT
+REAL*8 :: step_r,step_t,step_time,step_Omega,M_Start,KINETIC_MAT1,KINETIC_MAT2
+REAL*8 :: Conv,Energy,Mix,F0,H_DIAG1,H_DIAG2,t,LASER
+REAL*8 :: Opening,Radius,Depth,Soft,Stiff,Alpha,Beta,Gamma,Clip
+REAL*8 :: Deriv,Ordo,R_fit,Depth_fit,Depth2,Sigma,r0,Ek,k0,Norm
+CHARACTER(LEN=20) :: EXTPOTTYPE,XC_TYPE,THEORY,GAUGE,PROPAMETHOD,ELECTRON
+
+LOGICAL :: IFMASK,IFCLIP,IFENER,IFGS,IFWAVE,IFPROJ,IFNORM,IFPROB,IFDIP,IFHHG
+LOGICAL :: IFDIPGEN,IFHHGGEN,IFIONPROB,IFDENS,IFNESC,IFABSENER
+
+! Arrays
+
+INTEGER*8, DIMENSION(:), ALLOCATABLE :: QN_n,QN_l,QN_m,OCC
+REAL*8, DIMENSION(:), ALLOCATABLE :: r,MASK,EXTPOT,Eigenvalues,Eigenvectors
+REAL*8, DIMENSION(:), ALLOCATABLE :: Level_Energy,H_LASER1,H_LASER2,FIELD
+REAL*8, DIMENSION(:,:), ALLOCATABLE :: KINETIC_MAT,KS_MATRIX,H_DIAG,H_LASER
+REAL*8, DIMENSION(:,:), ALLOCATABLE :: Factor1,Factor2,PROBA_OCC
+REAL*8, DIMENSION(:,:,:), ALLOCATABLE :: H_NONDIAG,Factor,Dipole_Matrix
+REAL*8, DIMENSION(:,:,:,:), ALLOCATABLE :: EFFPOT,EFFPOT_OLD
+COMPLEX*16, DIMENSION(:), ALLOCATABLE :: W,TF,TF2,DIPOLE_GEN
+COMPLEX*16, DIMENSION(:,:), ALLOCATABLE :: GROUND_STATE,DIPOLE_TIME
+COMPLEX*16, DIMENSION(:,:,:), ALLOCATABLE :: RADIAL
+
+TYPE(PULSEFEATURES), ALLOCATABLE :: PULSEFEAT(:)
+
+!========================= Writing formats  =============================
+
+CHARACTER(LEN=*), PARAMETER :: FMT1="(ES20.10E3,ES20.10E3)"
+CHARACTER(LEN=*), PARAMETER :: FMT2="(I6,ES23.10E3,ES20.10E3,ES20.10E3)"
+CHARACTER(LEN=*), PARAMETER :: FMT3="(I6,I6,I6,ES20.10E3)"
+CHARACTER(LEN=*), PARAMETER :: FMT4="(I6,ES20.10E3,ES20.10E3,ES20.10E3)"
+CHARACTER(LEN=*), PARAMETER :: FMT5="(ES20.10E3,ES20.10E3,ES20.10E3,&
+&ES20.10E3,ES20.10E3,ES20.10E3,ES20.10E3,ES20.10E3,ES20.10E3)"
+CHARACTER(LEN=*), PARAMETER :: FMT6="(I6,ES20.10E3,ES20.10E3,I14)"
+CHARACTER(LEN=50) :: filename
+
+!================================= Pi ===================================
+
+REAL*8, PARAMETER :: PI=3.14159265358979D0
+
+!========================= CPU time calculation =========================
+
+REAL*8 :: start,end,elapsed_time
+
+!=========================== time calculation ===========================
+
+INTEGER*8, EXTERNAL :: time
+
+PRINT*,''
+PRINT*,'<><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><>'
+PRINT*,'<>                                                                <>'
+PRINT*,'<>                       === === =   === ===                      <>'
+PRINT*,'<>                       ===  =  =   === ===                      <>'
+PRINT*,'<>                       = =  =  === = = ===                      <>'
+PRINT*,'<>                                                                <>'
+PRINT*,'<><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><>'
+PRINT*,''
+
+CALL SYSTEM('date')
+
+! Read and store System parameters
+
+OPEN(10,file='../Template/System.inp',action='READ',status='unknown')
+
+READ(10,*)EXTPOTTYPE
+
+SELECT CASE(EXTPOTTYPE)
+   
+CASE("Atom")
+   READ(10,*)Z
+
+CASE("Step")
+   READ(10,*)Stiff,Radius,Depth
+
+CASE("Step_Coulomb")
+   READ(10,*)Z,Stiff,Radius,Depth
+
+CASE("Soft_Coulomb")
+   READ(10,*)Z,Soft,Radius
+
+END SELECT
+
+READ(10,*)THEORY
+READ(10,*)XC_TYPE
+READ(10,*)ELECTRON
+
+SELECT CASE(ELECTRON)
+   
+CASE("Orbitals")
+   READ(10,*)
+
+CASE("GaussianWP")
+   READ(10,*)Sigma,r0,Ek
+
+END SELECT
+
+READ(10,*)lmax
+READ(10,*)Norb
+
+ALLOCATE (QN_n(Norb),QN_l(Norb),QN_m(Norb),OCC(Norb))
+
+   DO i=1,Norb
+
+      READ(10,*)QN_n(i),QN_l(i),QN_m(i),OCC(i)
+
+   END DO
+
+CLOSE(10)
+
+mmax=MAXVAL(QN_m) ! Initialize maximum m value
+
+!PRINT*,'Z,lmax,Norb',Z,lmax,Norb
+!DO i=1,Norb
+!PRINT*,'QN_n,QN_l,QN_m,OCC',QN_n(i),QN_l(i),QN_m(i),OCC(i)
+!END DO
+
+! Read and store Grid parameters
+
+OPEN(20,file='../Template/Grid_Parameters.inp',action='READ',status='unknown')
+
+    READ(20,*)Radiusmax
+    READ(20,*)Ngrid_r
+    READ(20,*)Ngrid_t
+    READ(20,*)Ndiag
+    READ(20,*)Precision
+    READ(20,*)Tmax
+    READ(20,*)Ngrid_time
+    READ(20,*)Finite
+    READ(20,*)PROPAMETHOD
+
+    SELECT CASE(PROPAMETHOD)
+   
+    CASE("Expokit")
+       READ(20,*)m_Krylov
+
+    CASE("Taylor")
+       READ(20,*)m_Taylor
+
+    CASE("Taylor2")
+       READ(20,*)m_Taylor
+
+    END SELECT
+
+    READ(20,*)Tolerance
+    READ(20,*)Integration
+    READ(20,*)Omega_max
+    READ(20,*)Ngrid_Omega
+    READ(20,*)IFMASK
+    READ(20,*)Mask_Start
+    READ(20,*)IFCLIP
+    READ(20,*)Clip
+    READ(20,*)Threads
+
+CLOSE(20)
+
+! Read what to output
+
+OPEN(25,file='../Template/Outputs.inp',action='READ',status='unknown')
+
+    READ(25,*)IFENER
+    READ(25,*)IFGS
+    READ(25,*)IFWAVE
+    READ(25,*)NbWave
+    READ(25,*)IFDENS
+    READ(25,*)NbDensity
+    READ(25,*)IFPROJ
+    READ(25,*)IFNORM
+    READ(25,*)IFPROB
+    READ(25,*)IFIONPROB
+    READ(25,*)IFNESC
+    READ(25,*)IFDIP
+    READ(25,*)IFHHG
+    READ(25,*)IFDIPGEN
+    READ(25,*)IFHHGGEN
+    READ(25,*)IFABSENER
+
+CLOSE(25)
+
+PRINT*,'NbDensity',NbDensity
+
+!PRINT*,'Radiusmax,Ngrid_r,Ngrid_t,Precision,Tmax,Ngrid_time,m_Krylov',&
+!&Radiusmax,Ngrid_r,Ngrid_t,Precision,Tmax,Ngrid_time,m_Krylov
+!PRINT*,'Tolerance,m_Taylor,Integration,Omega_max,Ngrid_Omega,Mask_Start',&
+!&Tolerance,m_Taylor,Integration,Omega_max,Ngrid_Omega,Mask_Start
+
+!§§§§§§§§§§§§§§ Allocating arrays and testing allocation §§§§§§§§§§§§§§§§
+
+ALLOCATE(r(Ngrid_r),MASK(Ngrid_r))
+
+!§§§§ Defining the grid step for radial, time and frequancy domains §§§§§
+
+   step_r=Radiusmax/REAL(Ngrid_r)
+   step_t=PI
+   step_time=Tmax/REAL(Ngrid_time)
+   step_Omega=Omega_max/REAL(Ngrid_Omega)
+
+   !PRINT*,'step_r,step_t,step_time',step_r,step_t,step_time
+   !STOP
+
+!§§§§§ Initializing and constructing the {r} grid and the mask §§§§§§§§§§
+
+   ! Calculating the radial grid
+
+   DO i=1,Ngrid_r
+
+      r(i)=REAL(i)*step_r
+
+   END DO
+
+   ! Starting the mask if asked 
+
+   IF (IFMASK) THEN
+
+      M_Start=REAL(Mask_Start)*REAL(Ngrid_r)/100.D0
+      MASK=1.D0
+
+      !PRINT*,'r',r
+
+      !READ(*,*)
+  
+      DO i=1,Ngrid_r
+
+         IF (i .GT. M_Start) THEN
+
+            ! Computing the Mask
+            
+            MASK(i)=(1.D0-DCOS((PI/(REAL(Ngrid_r)-M_Start))*&
+                 &REAL(Ngrid_r-i)))/2.D0
+
+            !PRINT*,i,MASK(i)
+            !READ(*,*)
+            
+         END IF
+
+      END DO
+
+      OPEN(30,file='Mask.dat')
+
+      DO i=1,Ngrid_r
+
+         WRITE(30,FMT1)r(i),MASK(i)
+         !PRINT*,i,MASK(i)
+         !READ(*,*)
+
+      END DO
+
+   END IF
+   
+   CLOSE(30)
+
+!§§§§§ Initializing and constructing the Second Derivative Matrix §§§§§§§
+!§§§§§§§§§§§§§§§ 5 points finite-differences stencil §§§§§§§§§§§§§§§§§§§§
+
+   ALLOCATE(KINETIC_MAT(Ngrid_r,0:lmax))
+
+   ! Constructing the diagonal
+
+   DO l=0,lmax
+
+      DO i=1,Ngrid_r
+
+         IF (Finite == 5) THEN
+
+            ! Five points stencil
+         
+            KINETIC_MAT(i,l)=30.D0/(24.D0*step_r**2)+&
+                 &(REAL(l)*(REAL(l)+1.D0))/(2.D0*r(i)**2)
+
+            ! Clipping the matrix to 300.D0
+            ! Warning: the clipping can lead to wrong results when
+            ! the density of points becomes high
+
+            IF (IFCLIP .AND. KINETIC_MAT(i,l) .GT. Clip) KINETIC_MAT(i,l)=Clip
+         
+         ELSE IF (Finite == 3) THEN
+
+            ! Three points stencil
+
+            KINETIC_MAT(i,l)=1.D0/(step_r**2)+&
+                 &(REAL(l)*(REAL(l)+1.D0))/(2.D0*r(i)**2)   
+         
+            ! Clipping the matrix to 300.D0
+            ! Warning: the clipping can lead to wrong results when
+            ! the density of points becomes high
+
+            IF (IFCLIP .AND. KINETIC_MAT(i,l) .GT. Clip) KINETIC_MAT(i,l)=Clip
+
+         END IF
+
+      END DO
+   
+   END DO
+   
+   !KINETIC_MAT(1,0)=0.96*KINETIC_MAT(1,0)
+
+   ! Calculating the two super-diagonals
+
+   IF (Finite == 5) THEN
+
+      KINETIC_MAT1=-16.D0/(24.D0*step_r**2)
+      KINETIC_MAT2=1.D0/(24.D0*step_r**2)
+
+   ELSE IF (Finite == 3) THEN 
+
+      KINETIC_MAT1=-1.D0/(2.D0*step_r**2)
+      KINETIC_MAT2=0.D0
+
+   END IF
+
+!§§§§§ Initializing and constructing the Exterior potential Matrix §§§§§§
+
+ALLOCATE(EXTPOT(Ngrid_r))
+
+OPEN(120,file='Exterior_Potential.dat')
+
+   SELECT CASE(EXTPOTTYPE)
+
+      CASE ("Atom")
+
+         ! Coulombian potential
+
+         DO i=1,Ngrid_r
+
+            EXTPOT(i)=-Z/r(i)
+
+            WRITE(120,*)r(i),EXTPOT(i)
+
+         END DO
+
+      CASE ("Step")
+
+         ! Step-like potential
+
+         Alpha=Stiff       ! Fixes the slope of the potential
+         Beta=1.D0/Depth   ! Fixes the correct depth of the potential
+         Gamma=LOG(Beta)   ! Fixes the raduis to half the height
+
+         DO i=1,Ngrid_r
+            
+            EXTPOT(i)=-1.D0/(DEXP(Alpha*(r(i)-Radius)+Gamma)+Beta)
+
+            WRITE(120,*)r(i),EXTPOT(i)
+
+         END DO
+
+      CASE ("Step_Coulomb")
+
+         ! Step-like potential plus Coulombian behaviour at origin
+         ! Both fit at the fitting point R_fit
+
+         Alpha=Stiff       ! Fixes the slope of the potential
+         Beta=1.D0/Depth   ! Fixes the correct depth of the potential
+         Gamma=LOG(Beta)   ! Fixes the raduis to half the height
+
+         ! Derivative evaluated at Radius divided by 5.
+
+         Deriv=ALPHA*EXP(GAMMA)/((EXP(GAMMA)+BETA)**2)/5.D0
+
+         ! Ordinate at origin
+
+         Ordo=-Depth/2.D0-Deriv*Radius
+
+         ! Fitting point
+
+         R_fit=(-Depth-Ordo)/Deriv
+         Depth_fit=-Z/R_fit
+         
+         ! New Asymptotic limit to Coulombian behaviour
+
+         Depth2=Depth+Depth_fit
+       
+         DO i=1,Ngrid_r
+
+            IF (r(i) .LT. R_fit) THEN
+            
+               EXTPOT(i)=-Z/r(i)-Depth2
+
+            ELSE
+
+               EXTPOT(i)=-1.D0/(DEXP(Alpha*(r(i)-Radius)+Gamma)+Beta)
+
+            END IF
+
+            WRITE(120,*)r(i),EXTPOT(i)
+
+         END DO         
+
+      CASE ("Soft_Coulomb")
+
+         ! Softened Coulomb potential
+
+         DO i=1,Ngrid_r
+
+            EXTPOT(i)=-Z/SQRT(Soft**2+(r(i)-Radius)**2)
+
+            WRITE(120,*)r(i),EXTPOT(i)
+
+         END DO   
+
+      CASE ("Harmonic")
+
+         ! Harmonic potential
+
+         DO i=1,Ngrid_r
+
+            EXTPOT(i)=Opening*(r(i)-Radius)**2-Depth   
+   
+            IF(EXTPOT(i) .GT. 0.D0) EXTPOT(i)=0.D0
+
+            WRITE(120,*)r(i),EXTPOT(i)
+
+         END DO
+
+   END SELECT
+
+!§§§§§§§§§§§§§§ Trial for the Effective potential Matrix §§§§§§§§§§§§§§§§
+
+ALLOCATE(EFFPOT(Ngrid_r,0:lmax,0:lmax,0:mmax),EFFPOT_OLD(Ngrid_r,0:lmax,&
+&0:lmax,0:mmax))
+
+DO i=1,Ngrid_r
+   
+   EFFPOT(i,0,0,0)=-0.9D0*EXTPOT(i)
+   
+END DO
+
+!§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§
+!§§§§§§§§                                                       §§§§§§§§§
+!§§§§§§§§               GROUND-STATE CALCULATION                §§§§§§§§§
+!§§§§§§§§                                                       §§§§§§§§§
+!§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§
+
+PRINT*,''
+PRINT*,'===================================================================='
+PRINT*,'                 Kohn-Sham Ground-State Calculation                 '
+PRINT*,'===================================================================='
+PRINT*,''
+
+SELECT CASE(EXTPOTTYPE)
+   
+CASE("Atom")
+
+   PRINT*,'System=    ',EXTPOTTYPE
+   PRINT*,'Atomic number=',Z
+
+CASE("Step")
+
+   PRINT*,'System=    ',EXTPOTTYPE
+   PRINT*,'Stiffness=',Stiff
+   PRINT*,'Radius=',Radius
+   PRINT*,'Depth=',Depth
+
+CASE("Step_Coulomb")
+
+   PRINT*,'System=    ',EXTPOTTYPE
+   PRINT*,'Nuclear Charge=',Z
+   PRINT*,'Stiffness=',Stiff
+   PRINT*,'Radius=',Radius
+   PRINT*,'Depth=',Depth
+
+CASE("Soft_Coulomb")
+
+   PRINT*,'System=    ',EXTPOTTYPE
+   PRINT*,'Nuclear Charge=',Z
+   PRINT*,'Softening Parameter=',Soft
+
+END SELECT
+
+PRINT*,'Number of Orbitals=',Norb
+PRINT*,'Maximum radius [a.u.]=',Radiusmax
+PRINT*,'Points number=',Ngrid_r
+PRINT*,'Radial spacing=',step_r
+PRINT*,'Gauss-Legendre order=',Ngrid_t
+PRINT*,'Kohn-Sham precision required=',precision 
+PRINT*,''
+PRINT*,'Iteration    GS Energy [a.u.]     Convergence        Elapsed Time [s]'
+PRINT*,''
+
+ALLOCATE(KS_MATRIX(0:Ndiag,Ngrid_r),Eigenvalues(Ngrid_r),Eigenvectors(Ngrid_r))
+ALLOCATE(RADIAL(Ngrid_r,0:lmax,Norb),Level_Energy(Norb))
+
+SFC_COUNT=0               ! Self-Consistency counter
+Conv=1.D0                 ! Convergence parameter initialization
+RADIAL=DCMPLX(0.D0,0.D0)  ! Radial part initialization
+L_Coupling=0              ! No potential couplings
+TIME_COUNT=0
+
+DO WHILE(Conv .GT. Precision)
+
+   CALL CPU_TIME(start)
+
+   SFC_COUNT=SFC_COUNT+1
+
+   ! Mixing parameter
+
+   Mix=1.D0/(2.D0+0.05D0*REAL(SFC_COUNT))
+   !Mix=0.2D0
+
+   DO l=MINVAL(QN_l),MAXVAL(QN_l)
+
+      DO i=1,Ngrid_r
+
+         ! Compute Kohn-Sham Matrix diagonal in function of the
+         ! Theory level
+
+         SELECT CASE(THEORY)
+
+         CASE("Independent")
+
+            KS_MATRIX(0,i)=KINETIC_MAT(i,l)+EXTPOT(i)
+
+         CASE("XC_Functional")
+
+            KS_MATRIX(0,i)=KINETIC_MAT(i,l)+EXTPOT(i)+EFFPOT(i,0,0,0)
+
+         END SELECT
+
+         ! Compute Kohn-Sham Matrix superdiagonals
+
+         KS_MATRIX(1,i)=KINETIC_MAT1
+         KS_MATRIX(2,i)=KINETIC_MAT2
+
+      END DO
+
+      ! Calculate Eigenvalues
+
+      CALL EIGEN_VALUES(Ngrid_r,Ndiag,KS_MATRIX,Eigenvalues)
+
+      !DO i=1,200
+      !PRINT*,'Eigenvalues',Eigenvalues(i)
+      !END DO
+      !STOP
+
+      ! Calculate Eigenvectors
+
+      ! OMP PARALLEL NUM_THREADS(Norb)&
+      ! OMP DEFAULT(SHARED) PRIVATE(Orbital,Energy,i) ! Open the parallel region
+
+      ! OMP DO         ! Open the parallel loop
+
+      DO Orbital=1,Norb
+      
+         IF (QN_l(Orbital) == l) THEN
+
+            ! Select the correct energy
+
+            Energy=Eigenvalues(QN_n(Orbital))
+            Level_Energy(Orbital)=Eigenvalues(QN_n(Orbital))
+
+            CALL EIGEN_VECTORS(Ngrid_r,Ndiag,KS_MATRIX,Energy,&
+                 &Eigenvectors)
+
+            !DO i=1,Ngrid_r
+            !   PRINT*,'Eigenvectors',Eigenvectors(i)
+            !END DO
+
+            !STOP
+
+            ! Store the radial part of each wavefunction
+
+            DO i=1,Ngrid_r
+            
+               RADIAL(i,QN_l(Orbital),Orbital)=Eigenvectors(i)
+
+            END DO
+
+         END IF
+
+      END DO
+
+      ! OMP END DO
+
+      ! OMP END PARALLEL
+
+   END DO
+
+   ! Storing the previous effective matrix for Convergence parameter
+   ! calculation
+      
+   DO i=1,Ngrid_r
+
+      EFFPOT_OLD(i,0,0,0)=EFFPOT(i,0,0,0)
+      
+   END DO
+
+   ! Calculating the new effective matrix
+
+   CALL EFFPOTMAT(r,Ngrid_r,Ngrid_t,step_r,lmax,mmax,Norb,QN_m,OCC,&
+        &RADIAL,L_Coupling,EFFPOT,XC_TYPE,.FALSE.,TIME_COUNT,NbDensity)
+
+   ! Calculating Convergence parameter
+
+   CALL CONVERGENCE(r,Ngrid_r,step_r,EFFPOT_OLD,EFFPOT,lmax,mmax,Conv)
+
+   !STOP
+
+   ! Mixing the new effective matrix with the old one
+
+   DO i=1,Ngrid_r
+
+      EFFPOT(i,0,0,0)=Mix*EFFPOT(i,0,0,0)+(1.D0-Mix)*EFFPOT_OLD(i,0,0,0)
+
+   END DO
+
+   CALL CPU_TIME(end)
+   elapsed_time=end-start
+
+   ! Display some information
+
+   WRITE(*,FMT2)SFC_COUNT,Level_Energy(1),Conv,elapsed_time
+
+END DO
+
+!§§§§§§§§§§§§§§§§§§§§§§ Write Output results §§§§§§§§§§§§§§§§§§§§§§§§§§§§
+
+ALLOCATE(GROUND_STATE(Ngrid_r,Norb))
+
+DO Orbital=1,Norb
+
+   ! Ground-State Energies
+
+   IF (IFENER) THEN
+
+      OPEN(40,file='GS_Energies.dat')
+      WRITE(40,FMT3)QN_n(Orbital),QN_l(Orbital),QN_m(Orbital),&
+           &Level_Energy(Orbital)
+   
+   END IF
+
+   ! Ground-State radial part
+
+   DO i=1,Ngrid_r
+
+      GROUND_STATE(i,Orbital)=RADIAL(i,QN_l(Orbital),Orbital)
+
+      IF (IFGS) THEN
+
+         WRITE(filename,'(a15,I3.3,a4)')'GS_Radial_Norb=',Orbital,'.dat'
+         OPEN(50,file=filename)
+         WRITE(50,*)r(i),REAL(RADIAL(i,QN_l(Orbital),Orbital)),&
+              &AIMAG(RADIAL(i,QN_l(Orbital),Orbital))
+
+      END IF
+
+   END DO
+
+END DO
+
+CLOSE(40)
+CLOSE(50)
+
+!STOP
+
+! Analytical Hydrogen checks for testing Hamiltonian blocks
+
+!DO i=1,Ngrid_r
+
+ !RADIAL(i,0,1)=2.D0*r(i)*EXP(-r(i))                          ! Analytical H(1s)
+ !RADIAL(i,0,1)=0.D0
+
+ !WRITE(filename,'(a25)')'Radial_Norb=001_t=000.dat'
+ !OPEN(50,file=filename)
+ !WRITE(50,*)r(i),REAL(RADIAL(i,0,1))
+
+ !RADIAL(i,0,2)=(2.D0-r(i))*EXP(-r(i)/2.D0)/(2.D0*SQRT(2.D0)) ! Analytical H(2s)
+ !RADIAL(i,0,2)=0.D0
+
+ !WRITE(filename,'(a25)')'Radial_Norb=002_t=000.dat'
+ !OPEN(50,file=filename)
+ !WRITE(50,*)r(i),REAL(RADIAL(i,0,2))
+
+ !RADIAL(i,0,3)=(6.D0-4.D0*r(i)+4.D0*r(i)**2/9.D0)*&          ! Analytical H(3s)
+ !  &EXP(-r(i)/3.D0)/(9.D0*SQRT(3.D0))
+ !RADIAL(i,0,3)=0.D0
+
+ !WRITE(filename,'(a25)')'Radial_Norb=003_t=000.dat'
+ !OPEN(50,file=filename)
+ !WRITE(50,*)r(i),REAL(RADIAL(i,0,3))
+
+ !RADIAL(i,1,3)=(1.D0/(2.D0*SQRT(6.D0)))*r(i)*EXP(-r(i)/2.D0) ! Analytical H(2p)
+ !RADIAL(i,1,2)=0.D0
+
+ !WRITE(filename,'(a25)')'Radial_Norb=003_t=000.dat'
+ !OPEN(50,file=filename)
+ !WRITE(50,*)r(i),REAL(RADIAL(i,1,3))
+
+ !RADIAL(i,1,3)=(4.D0-2.D0*r(i)/3.D0)*2.D0*r(i)*&             ! Analytical H(3p)
+ !  &EXP(-r(i)/3.D0)/(27.D0*SQRT(6.D0))
+ !RADIAL(i,1,3)=0.D0
+
+ !WRITE(filename,'(a25)')'Radial_Norb=005_t=000.dat'
+ !OPEN(50,file=filename)
+ !WRITE(50,*)r(i),REAL(RADIAL(i,1,3))
+   
+ !RADIAL(i,2,3)=4.D0*r(i)**2*EXP(-r(i)/3.D0)/&                ! Analytical H(3d)
+ !  &(81.D0*SQRT(30.D0))
+
+ !WRITE(filename,'(a25)')'Radial_Norb=006_t=000.dat'
+ !OPEN(50,file=filename)
+ !WRITE(50,*)r(i),REAL(RADIAL(i,2,3))
+
+!END DO
+
+! Gaussian check
+
+!RADIAL(i+2*Ngrid_r,Orbital)=EXP(-(r(i)-5.D0)**2)
+!PSI_GS(i,j)=PSI_GS(i,j)+RADIAL(i+2*Ngrid_r,Orbital)*&
+!     &TILDE_P_l(2,GL_ARG(j))
+
+SELECT CASE(ELECTRON)
+
+CASE("Orbitals")
+
+   CONTINUE
+
+CASE("GaussianWP")
+
+   ! Open data file
+
+   OPEN(150,file='Gaussian_WP.dat')
+
+   ! Wave number Ek=k**2.2.D0
+
+   k0=SQRT(2.D0*Ek)
+
+   ! Normalization
+   
+   Norm=SQRT(2.D0/(SQRT(2.D0*PI)*Sigma*(ERF(r0/(SQRT(2.D0)*Sigma))+1.D0)))
+
+   DO i=1,Ngrid_r
+
+      RADIAL(i,0,1)=DEXP(-(r(i)-r0)**2/(4.D0*Sigma**2))&
+           &*EXP(DCMPLX(0.D0,k0*r(i)))
+      RADIAL(i,0,1)=SQRT(step_r)*Norm*RADIAL(i,0,1)
+      
+      WRITE(150,*)r(i),REAL(RADIAL(i,0,1)),AIMAG(RADIAL(i,0,1))
+
+   END DO
+
+   CLOSE(150)
+
+END SELECT
+
+!STOP
+
+!§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§
+!§§§§§§§§                                                       §§§§§§§§§
+!§§§§§§§§                  PROPAGATION IN TIME                  §§§§§§§§§
+!§§§§§§§§                                                       §§§§§§§§§
+!§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§
+
+!§§§§§§§§§§§§§§§§§ Reading Field Input parameters §§§§§§§§§§§§§§§§§§§§§§§
+
+OPEN(60,file='../Template/Field.inp',action='READ',status='unknown')
+
+READ(60,*)NPulses
+
+ALLOCATE(PULSEFEAT(NPulses))
+
+DO i=1,NPulses
+
+READ(60,*)PULSEFEAT(i)%ENVELOPE
+
+SELECT CASE(PULSEFEAT(i)%ENVELOPE)
+
+CASE("SinSqr")
+
+   READ(60,*)PULSEFEAT(i)%Ncycles
+   READ(60,*)PULSEFEAT(i)%Ampli
+   READ(60,*)PULSEFEAT(i)%Omega
+   READ(60,*)PULSEFEAT(i)%Phi
+   READ(60,*)PULSEFEAT(i)%Delay
+
+CASE("Gaussian")
+
+   READ(60,*)PULSEFEAT(i)%FWHM
+   READ(60,*)PULSEFEAT(i)%Ampli
+   READ(60,*)PULSEFEAT(i)%Omega
+   READ(60,*)PULSEFEAT(i)%Phi
+   READ(60,*)PULSEFEAT(i)%Delay
+
+CASE("Ramped")
+
+   READ(60,*)PULSEFEAT(i)%Rcycles,PULSEFEAT(i)%Fcycles
+   READ(60,*)PULSEFEAT(i)%Ampli
+   READ(60,*)PULSEFEAT(i)%Omega
+   READ(60,*)PULSEFEAT(i)%Phi
+   READ(60,*)PULSEFEAT(i)%Delay
+
+END SELECT
+
+END DO
+
+READ(60,*)GAUGE
+
+CLOSE(60)
+
+!PRINT*,'F0,Omega,Ncycles,ENVELOPE,GAUGE',F0,Omega,Ncycles,ENVELOPE,GAUGE
+
+!§§§§§§§§§§§§§ Compute the Laser Coupling prefactor §§§§§§§§§§§§§§§§§§§§§
+
+ALLOCATE(Factor(Ngrid_r,0:lmax,0:mmax),Factor1(0:lmax,0:mmax),&
+&Factor2(0:lmax,0:mmax),FIELD(Ngrid_time+1))
+ALLOCATE(Dipole_Matrix(Ngrid_r,0:lmax,0:mmax),DIPOLE_TIME(Ngrid_time+1,Norb),&
+&DIPOLE_GEN(Ngrid_time+1),PROBA_OCC(Ngrid_time+1,Norb))
+
+DO m=0,mmax
+
+   DO l=m,lmax-1
+
+      SELECT CASE (GAUGE)
+
+         CASE ("Length")
+
+            DO i=1,Ngrid_r
+
+               ! Compute the diagonal prefactor
+
+               Factor(i,l,m)=r(i)*SQRT(((REAL(l)+1.D0)**2-REAL(m)**2)&
+                    &/((2.D0*REAL(l)+1.D0)*(2.D0*REAL(l)+3.D0)))
+
+            END DO
+
+            ! Compute the super- and sub- diagonal prefactors
+
+            Factor1(l,m)=0.D0
+            Factor2(l,m)=0.D0
+
+         CASE ("Velocity")
+
+            PRINT*,'Work in progress...'
+            STOP
+
+         END SELECT
+
+   END DO
+
+END DO
+
+!§§§§§§§§§§§§§ Compute the Dipole Coupling matrix §§§§§§§§§§§§§§§§§§§§§§§
+
+DO m=0,mmax
+
+   DO l=m,lmax-1
+
+      DO i=1,Ngrid_r
+
+         ! Compute the diagonal prefactor
+
+         Dipole_Matrix(i,l,m)=r(i)*SQRT(((REAL(l)+1.D0)**2-REAL(m)**2)&
+              &/((2.D0*REAL(l)+1.D0)*(2.D0*REAL(l)+3.D0)))
+
+      END DO
+
+   END DO
+
+END DO
+
+!STOP
+
+ALLOCATE(H_DIAG(Ngrid_r,0:lmax),H_NONDIAG(Ngrid_r,0:lmax,0:lmax),&
+     &H_LASER(Ngrid_r,0:lmax),H_LASER1(0:lmax),H_LASER2(0:lmax))
+
+t=0.D0
+L_Coupling=lmax
+
+!§§§§§§§§§§§§§§§§§§ Starting the time propagation §§§§§§§§§§§§§§§§§§§§§§§
+
+PRINT*,''
+PRINT*,'===================================================================='
+PRINT*,'                      Propagation in time                           '   
+PRINT*,'===================================================================='
+PRINT*,''
+PRINT*,'Maximum angular momentum for Time-propagation=',lmax
+PRINT*,'Maximum time [a.u.]=',Tmax
+PRINT*,'Points number=',Ngrid_time
+PRINT*,'Time spacing [a.u.]=',step_time
+PRINT*,'Probability/Dipole integration on [a.u.]=',Integration*step_r
+
+SELECT CASE(PROPAMETHOD)
+   
+CASE("Expokit")
+
+   PRINT*,'Krylov order=',m_Krylov
+
+CASE("Taylor")
+
+   PRINT*,'Taylor order=',m_Taylor
+
+CASE("Taylor2")
+
+   PRINT*,'Taylor order=',m_Taylor
+
+END SELECT
+
+PRINT*,'Number of pulses',NPulses
+
+DO i=1,NPulses
+
+PRINT*,'Features pulse number',i
+PRINT*,'Envelope    ',PULSEFEAT(i)%ENVELOPE
+
+SELECT CASE(PULSEFEAT(i)%ENVELOPE)
+
+CASE("SinSqr")
+
+   PRINT*,'Field maximum amplitude [a.u.]=',PULSEFEAT(i)%Ampli
+   PRINT*,'Optical cycles=',PULSEFEAT(i)%Ncycles
+   PRINT*,'Photon energy [a.u.]=',PULSEFEAT(i)%Omega
+   PRINT*,'Pulse duration [a.u.]=',2.D0*PI*PULSEFEAT(i)%Ncycles/&
+        &PULSEFEAT(i)%Omega
+   PRINT*,'Pulse phase [rad]=',PULSEFEAT(i)%Phi
+   PRINT*,'Pulse delay [a.u.]=',PULSEFEAT(i)%Delay
+
+CASE("Gaussian")
+
+   PRINT*,'Field maximum amplitude [a.u.]=',PULSEFEAT(i)%Ampli
+   PRINT*,'FWHM=',PULSEFEAT(i)%FWHM
+   PRINT*,'Photon energy [a.u.]=',PULSEFEAT(i)%Omega
+   PRINT*,'Pulse phase [rad]=',PULSEFEAT(i)%Phi
+   PRINT*,'Pulse delay [a.u.]=',PULSEFEAT(i)%Delay
+
+CASE("Ramped")
+
+   PRINT*,'Field maximum amplitude [a.u.]=',PULSEFEAT(i)%Ampli
+   PRINT*,'Optical cycles ramped up=',PULSEFEAT(i)%Rcycles
+   PRINT*,'Optical cycles flat=',PULSEFEAT(i)%Fcycles
+   PRINT*,'Photon energy [a.u.]=',PULSEFEAT(i)%Omega
+   PRINT*,'Pulse duration [a.u.]=',2.D0*PI*(PULSEFEAT(i)%Ncycles+&
+        &PULSEFEAT(i)%Fcycles)/PULSEFEAT(i)%Omega
+   PRINT*,'Pulse phase [rad]=',PULSEFEAT(i)%Phi
+   PRINT*,'Pulse delay [a.u.]=',PULSEFEAT(i)%Delay
+
+END SELECT
+
+END DO
+
+PRINT*,''
+PRINT*,'Iteration    Time [a.u.]    CPU Elapsed Time [s]'
+PRINT*,''
+
+TIME_COUNT=0
+
+DO WHILE(t .LE. Tmax)
+
+   starttime=time()
+   CALL CPU_TIME(start)
+
+   TIME_COUNT=TIME_COUNT+1
+
+   ! Calculating the effective matrix
+      
+   CALL EFFPOTMAT(r,Ngrid_r,Ngrid_t,step_r,lmax,mmax,Norb,QN_m,OCC,&
+        &RADIAL,L_Coupling,EFFPOT,XC_TYPE,IFDENS,TIME_COUNT,NbDensity)
+
+   DO m=0,mmax
+
+      lmin=m
+
+      ! Compute the different blocks of the Hamiltonian matrix
+
+      ! Compute the diagonal blocks 
+
+      H_DIAG=0.D0
+      H_DIAG1=0.D0
+      H_DIAG2=0.D0
+      
+      DO l=m,lmax
+
+         DO i=1,Ngrid_r
+
+            ! Compute the diagonal of each diagonal block
+
+            SELECT CASE(THEORY)
+
+            CASE("Independent")
+
+               H_DIAG(i,l)=KINETIC_MAT(i,l)+EXTPOT(i)
+
+            CASE("XC_Functional")
+
+               H_DIAG(i,l)=KINETIC_MAT(i,l)+EXTPOT(i)+EFFPOT(i,l,l,m)
+
+            END SELECT
+
+         END DO
+
+      END DO
+
+      !DO i=1,Ngrid_r
+      !   PRINT*,'KINETIC_MAT',KINETIC_MAT(i,1)
+      !   PRINT*,'EXTPOT',EXTPOT(i)
+      !   PRINT*,'EFFPOT',EFFPOT(i,1,0,0)
+      !   PRINT*,'H_DIAG',H_DIAG(i,1)
+      !END DO
+
+      !PRINT*,'m',m
+
+      !READ(*,*)
+
+      !STOP
+
+      ! Compute the superdiagonals of each diagonal block
+
+      H_DIAG1=KINETIC_MAT1
+      H_DIAG2=KINETIC_MAT2
+
+      ! Compute the non-diagonal blocks from the effective potential 
+      ! couplings
+
+      H_NONDIAG=0.D0
+
+      SELECT CASE(THEORY)
+
+      CASE("Independent")
+
+         H_NONDIAG=0.D0
+
+      CASE ("XC_Functional")
+
+         DO l=m,lmax
+
+            DO lprime=m,lmax
+
+               ! Compute the diagonal of each non-diagonal block
+
+               Diff=ABS(l-lprime)
+
+               IF ((Diff .GT. 0) .AND. (Diff .LE. L_Coupling)) THEN
+
+                  DO i=1,Ngrid_r
+
+                     H_NONDIAG(i,l,lprime)=EFFPOT(i,l,lprime,m)
+
+                  END DO
+
+               END IF
+
+            END DO
+
+         END DO
+
+      END SELECT
+
+      !DO i=1,10
+      !   PRINT*,'H_NONDIAG',H_NONDIAG(i,0,1)
+      !END DO
+
+      !PRINT*,'m',m
+
+      !STOP
+
+      ! Compute the non-diagonal blocks from the laser couplings
+
+      ! Evaluation of the laser electric field at t+dt/2
+
+      H_LASER=0.D0
+      H_LASER1=0.D0
+      H_LASER2=0.D0
+
+      LASER=PULSE(t+step_time/2.D0,PULSEFEAT,NPulses)
+
+      DO l=m,lmax-1
+
+         ! Compute the diagonal
+
+         DO i=1,Ngrid_r
+
+            H_LASER(i,l)=-Factor(i,l,m)*LASER
+
+            !PRINT*,'Factor',Factor(i,l,m)
+            !PRINT*,'LASER',LASER
+            !PRINT*,'t+step_time/2.D0',t+step_time/2.D0
+            !PRINT*,'step_time/2.D0',step_time/2.D0
+            !READ(*,*)
+
+         END DO
+
+         ! Compute the superdiagonals (null if length gauge choice)
+
+         H_LASER1(l)=-Factor1(l,m)*LASER
+         H_LASER2(l)=-Factor2(l,m)*LASER
+
+      END DO
+
+      !DO i=1,Ngrid_r
+      !   PRINT*,'H_LASER',H_LASER(i,2)
+      !END DO
+
+      !STOP
+
+      !PRINT*,'LASER',LASER
+      !PRINT*,'t+step_time/2.D0',t+step_time/2.D0
+      !PRINT*,'t,step_time',t,step_time
+      !STOP
+
+      ! Evaluate the action of the exponential Hamiltonian on the radial
+      ! part of each wavefunction
+
+      !$OMP PARALLEL NUM_THREADS(Threads)&         ! Open the parallel region  
+      !$OMP DEFAULT(SHARED) PRIVATE(Orbital,i,j,l,W,filename)
+
+      NTHRD=OMP_GET_THREAD_NUM()
+      MAXTHRD=OMP_GET_NUM_THREADS()
+
+      ALLOCATE(W((lmax+1)*Ngrid_r))
+
+      !$OMP DO ORDERED                             ! Open the parallel loop
+
+      DO Orbital=1,Norb
+
+      !WRITE(*,'(a14,I3.3,a6,I3.3,a18,I3.3)')'Thread number ',NTHRD,' over ',MAXTHRD,' Number of Threads'
+
+
+         IF (QN_m(Orbital) == m) THEN
+
+            SELECT CASE (PROPAMETHOD)
+
+            CASE ("Expokit")
+
+               ! Compute the action of the Hamiltonian
+
+               CALL EXPOMAT(Ngrid_r,m_Krylov,step_time,tolerance,RADIAL,Norb,&
+                    &Orbital,lmin,lmax,L_Coupling,H_DIAG,H_DIAG1,H_DIAG2,&
+                    &H_NONDIAG,H_LASER,H_LASER1,H_LASER2,W)
+
+               !DO i=1,(lmax+1)*Ngrid_r
+               !   PRINT*,'W',W(i)
+               !   IF(i==500 .OR. i==1000 .OR. i==1500 .OR. i==2000) READ(*,*)
+               !END DO
+               !STOP
+
+               ! Store the result
+
+               DO l=0,lmax
+
+                  DO i=1,Ngrid_r
+                     
+                     j=i+l*Ngrid_r
+
+                     RADIAL(i,l,Orbital)=W(j)
+
+                  END DO
+
+               END DO
+               
+            CASE ("Taylor")
+
+               ! Compute the action of the Hamiltonian
+
+               CALL TAYLOR(Ngrid_r,Norb,Orbital,lmax,step_time,m_Taylor,&
+                    &H_DIAG,H_DIAG1,H_DIAG2,H_NONDIAG,H_LASER,H_LASER1,&
+                    &H_LASER2,RADIAL,W)
+
+               !DO i=1,(lmax+1)*Ngrid_r
+               !   PRINT*,'W',W(i)
+               !   IF(i==500 .OR. i==1000 .OR. i==1500 .OR. i==2000) READ(*,*)
+               !END DO
+               !STOP
+
+               ! Store the result
+
+               DO l=0,lmax
+
+                  DO i=1,Ngrid_r
+                     
+                     j=i+l*Ngrid_r
+
+                     RADIAL(i,l,Orbital)=W(j)
+
+                  END DO
+
+               END DO
+
+            CASE ("Taylor2")
+
+               CALL propexact(Ngrid_r,RADIAL(1:Ngrid_r,0:lmax,Orbital),&
+                    &m_Taylor,step_time,H_DIAG,H_DIAG1,H_DIAG2,&
+                    &H_NONDIAG,H_LASER,H_LASER1,H_LASER2,lmin,lmax,&
+                    &L_Coupling)
+
+            END SELECT
+
+         END IF
+
+         ! Save the real and imaginary part of the wavefunctions at all 
+         ! time iterations if asked
+
+         IF (IFWAVE .AND. MOD(TIME_COUNT,NbWave)==0) THEN
+
+            WRITE(filename,'(a12,I3.3,a3,I5.4,a4)')'Radial_Norb=',Orbital,&
+                 &'_t=',TIME_COUNT,'.dat'
+            OPEN(60,file=filename)
+
+            DO i=1,Ngrid_r
+            !PRINT*,'RADIAL',RADIAL(i,QN_l(Orbital),Orbital)
+               WRITE(60,FMT5)r(i),REAL(RADIAL(i,0,Orbital)),&
+                    &AIMAG(RADIAL(i,0,Orbital)),&
+                    &REAL(RADIAL(i,1,Orbital)),&
+                    &AIMAG(RADIAL(i,1,Orbital)),&
+                    &REAL(RADIAL(i,2,Orbital)),&
+                    &AIMAG(RADIAL(i,2,Orbital)),&
+                    &REAL(RADIAL(i,3,Orbital)),&
+                    &AIMAG(RADIAL(i,3,Orbital))
+            END DO
+
+         !DO i=1,(lmax+1)*Ngrid_r
+         !   PRINT*,'W',W(i)
+         !   WRITE(60,*)i,REAL(W(i)),AIMAG(W(i))
+         !END DO
+
+         !STOP
+         
+         END IF
+
+      END DO
+
+      !$OMP END DO          ! Close the parallel loop
+
+      DEALLOCATE(W)
+
+      !$OMP END PARALLEL    ! Close the parallel region
+      
+      ! Masking the wavefunction if asked
+
+      IF (IFMASK) THEN
+
+         DO Orbital=1,Norb
+
+            DO l=QN_m(Orbital),lmax
+
+               DO i=1,Ngrid_r
+
+                  RADIAL(i,l,Orbital)=RADIAL(i,l,Orbital)*MASK(i)               
+
+               END DO
+
+            END DO
+
+         END DO
+
+      END IF
+
+   END DO
+
+   !%%%%%%%%%%%%%%%%%%%% Compute Output results %%%%%%%%%%%%%%%%%%%%%%%%%
+
+   ! Ground-State projection of each wavefunction
+
+   IF (IFPROJ) THEN
+
+      CALL PROJECTION(Ngrid_r,Norb,lmax,GROUND_STATE,RADIAL,&
+           &QN_l,t)
+
+   END IF
+
+   ! Norm of each wavefunction (Sum over all angular momenta)
+
+   IF (IFNORM) THEN 
+
+      CALL WAVE_NORM(Ngrid_r,Norb,lmax,RADIAL,QN_m,t)
+      
+   END IF
+
+   ! Probability of each wavefunction (norm integrated over an integration 
+   ! region)
+
+   IF (IFPROB) THEN
+
+      CALL PROBA(TIME_COUNT,Ngrid_time,Integration,Ngrid_r,Norb,lmax,RADIAL,&
+           &QN_m,t,PROBA_OCC)
+
+   END IF
+
+   ! Ionization probabilities for each state for charge of the system
+
+   IF (IFIONPROB) THEN
+
+      CALL IONIZATION_PROBA(Z,TIME_COUNT,Ngrid_time,Norb,PROBA_OCC,t)
+
+   END IF
+
+   ! Number of escaped electrons
+
+   IF (IFNESC) THEN
+
+      CALL NESC(Z,TIME_COUNT,Ngrid_time,Integration,Ngrid_r,Norb,lmax,RADIAL,&
+           &QN_m,OCC,t)
+
+   END IF
+
+   ! Electronic Dipole of each wavefunction
+
+   IF (IFDIP) THEN
+
+      CALL DIPOLE(TIME_COUNT,Ngrid_time,Ngrid_r,Norb,lmax,mmax,&
+           &RADIAL,QN_m,t,Dipole_Matrix,DIPOLE_TIME)
+
+   END IF
+
+   ! General Dipole, summation over all individual dipoles
+
+   IF (IFDIPGEN) THEN
+
+      CALL DIPOLE_GENERAL(TIME_COUNT,Ngrid_time,step_time,Norb,DIPOLE_TIME,&
+           &DIPOLE_GEN)
+
+   END IF
+
+   OPEN(90,file='Field.dat',position='append')
+
+   FIELD(TIME_COUNT)=PULSE(t,PULSEFEAT,NPulses)
+   
+   WRITE(90,*)t,FIELD
+
+   CLOSE(90)
+
+   ! Display some information
+
+   CALL CPU_TIME(end)
+   elapsed_time=end-start
+
+   endtime=time()
+   measuredtime=endtime-starttime
+
+   WRITE(*,FMT6)TIME_COUNT,t,elapsed_time,measuredtime
+
+   t=t+step_time
+
+END DO
+
+IF (IFDIP .AND. IFHHG) THEN
+
+PRINT*,''
+PRINT*,'===================================================================='
+PRINT*,'      Calculating Discrete Fourier Transform and HHG Spectrum       '   
+PRINT*,'===================================================================='
+PRINT*,''
+
+ALLOCATE(TF(Ngrid_Omega))
+
+DO Orbital=1,Norb
+
+   WRITE(filename,'(a18,I3.3,a4)')'HHG_Spectrum_Norb=',Orbital,'.dat'
+   OPEN(110,file=filename)
+
+   CALL DFT_Time(Ngrid_Omega,step_Omega,Ngrid_time,step_time,DIPOLE_TIME,Norb,&
+        &Orbital,TF)
+
+   DO i=1,Ngrid_Omega
+
+      Omega_DFT=REAL(i)*step_Omega
+
+      WRITE(110,*)Omega_DFT,ABS(TF(i))**2 ! Fourier transform & HHG
+
+   END DO
+
+END DO
+
+DEALLOCATE(TF)
+
+END IF
+
+IF (IFDIPGEN .AND. IFHHGGEN) THEN
+
+PRINT*,''
+PRINT*,'===================================================================='
+PRINT*,'      Calculating Discrete Fourier Transform and HHG Spectrum       ' 
+PRINT*,'                        from general dipole                         '  
+PRINT*,'===================================================================='
+PRINT*,''
+
+ALLOCATE(TF2(Ngrid_Omega))
+
+OPEN(170,file='HHG_Spectrum_General.dat')
+
+CALL DFT_Time2(Ngrid_Omega,step_Omega,Ngrid_time,step_time,DIPOLE_GEN,TF2)
+
+   DO i=1,Ngrid_Omega
+
+      Omega_DFT=REAL(i)*step_Omega
+
+      WRITE(170,*)Omega_DFT,ABS(TF2(i))**2 ! Fourier transform & HHG
+
+   END DO
+
+DEALLOCATE(TF2)
+
+END IF
+
+! Calculation of absorbed energy
+
+IF(IFABSENER) THEN
+
+PRINT*,''
+PRINT*,'===================================================================='
+PRINT*,'             Calculating the absorbed energy                        '  
+PRINT*,'===================================================================='
+PRINT*,''
+
+   CALL ABSORBED_ENERGY(Ngrid_time,step_time,DIPOLE_GEN,FIELD)
+
+END IF
+
+DEALLOCATE(QN_n,QN_l,QN_m,OCC,GROUND_STATE)
+DEALLOCATE(r,MASK,EXTPOT,Eigenvalues,Eigenvectors)
+DEALLOCATE(KINETIC_MAT,KS_MATRIX,H_DIAG,H_NONDIAG,H_LASER,H_LASER1,H_LASER2)
+DEALLOCATE(EFFPOT,EFFPOT_OLD,RADIAL,Level_Energy,Factor,Factor1,Factor2)
+DEALLOCATE(DIPOLE_TIME,DIPOLE_GEN,PROBA_OCC,FIELD)
+
+END PROGRAM ATLAS

@@ -1,0 +1,31 @@
+200.D0		! Radius size [a.u.] [real]
+10000		! Number of points in radial coordinate [integer]
+16		! Gauss-Legendre Order [integer]
+2		! Number of super(sub) diagonals for Derivative Matrix [integer]
+1.D-12		! Precision required for Kohn-Sham Self-Consistency [real]
+20000.D0	! Maximum value of the time grid in [a.u.] [real]
+200000		! Number of points for time grid [integer]
+3		! Finite-Difference Order [integer]
+Expokit		! Propagation method 
+20		! Propagation features
+1.D-10		! Arnoldi's procedure tolerance [real]
+500		! Integration number of points for probability [integer]
+10.D0		! Omega maximum for Discrete Fourier Transform [a.u.] [real]
+10000		! Interval number for Discrete Fourier Transform [integer]
+.FALSE.		! Masking the wavefunction [logical]
+80		! Starting the Mask (integer between 0 and 100) [integer]
+.FALSE.		! Clipping the Hamiltonian [logical]
+300.D0		! Upper clip limit [real]
+2		! Number of Threads
+
+! Gauss-Legendre Order: 2,4,6,8,10,12,16,32,64,128,256
+
+! Finite-Difference Order: 3,5
+
+! Propagation method choices: Expokit,Taylor,Taylor2
+! Expokit: Next line is Dimension of Krylov space [integer]
+! Taylor: Next line is Dimension of Taylor expansion [if needed, integer]
+! Taylor2: Next line is Dimension of Taylor expansion [if needed, integer]
+
+! Omega maximum defines the spectral range where the Discrete Fourier Transform
+! is computed. The Nyquist frequency is w=Pi/dt where dr is the time step.

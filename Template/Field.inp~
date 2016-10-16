@@ -1,0 +1,21 @@
+1			! Number of pulses
+SinSqr			! Temporal profile
+5			! Pulse features 
+0.1D0			! F0 maximum field amplitude in [a.u.] [real]
+1.D0			! Omega photon energy in [a.u.] [real]
+0.D0			! Phase [rad.] [real]
+0.D0			! Delay [a.u.] [real]
+Length			! Gauge
+
+! REMARKS: Intensity in W.cm^-2 is deduced from the field amplitude using
+! the formula I=3.51.10^16x|F0|².
+
+! Pulse Temporal profile choices: SinSqr, Gaussian, Ramped
+! SinSqr: Next line is the number of Optical Cycles [integer]
+! Gaussian: Next line is Full Width Half Maximum (FWHM)[a.u.] [real]
+! Ramped: Next line is Ramped Cycles [integer], Flat Cycles [integer]
+
+! Gauge choices: Length
+
+! Defining more than one pulse: Copy lines 2-6 for every subsequent pulse
+! Each pulse is define as it was at the origin but translated with the delay.

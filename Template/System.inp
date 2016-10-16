@@ -1,0 +1,35 @@
+Atom				! Exterior potential type
+18				! Nuclear charge [integer]
+XC_Functional			! Theory level
+GTH				! Exchange-Correlation type
+Orbitals			! Electron at t=0
+0.D0				! Electron features
+10				! Maximum angular momentum for time-propagation
+7				! Number of Orbitals [integer]
+1	0	0	2	! 1s0 Orbital
+2	0	0	2	! 2s0 Orbital
+3	0	0	2	! 3s0 Orbital
+1	1	0	2	! 2p0 Orbital
+2	1	0	2	! 3p0 Orbital
+1	1	1	4	! 2p1 Orbital
+2	1	1	4	! 3p1 Orbital
+
+!n	l	m	Occ.
+
+! Exterior potential type choices: Atom, Step, Soft_Coulomb
+! Atom: Next line is Nuclear charge only [integer].
+! Step: Next line is Nuclear charge [integer], Radius [a.u.] and Depth [a.u.].
+! Soft_Coulomb: Next Line is Nuclear charge [integer], Softening parameter[real],
+! Radius [a.u.]
+! Harmonic: Next line is Opening [real], Radius [real] and Depth [real]
+
+! Theory level choices: Independent, XC_Functional
+! Exchange-Correlation type choices: LDA,GTH
+
+! Electron at t=0 choices: Orbitals, GaussianWP
+! Orbitals: Electrons remains in the atomic ground-state orbitals at t=0
+! WARNING: Should be selected for ALL multielectronic cases.
+! Next line is useless, set to 0.
+! GaussianWP: Electron is described by a Gaussian wavepacket
+! WARNING: Available for monoelectronic case
+! Next line: Width [real], Center [real], Initial kinetic energy [real a.u.]

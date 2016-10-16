@@ -1,0 +1,16 @@
+.TRUE.		! Write the Ground-State energies
+.TRUE.		! Write the Ground-State wfs
+.TRUE.		! Write the wavefunctions at a defined number of time step
+10000		! Number of times step for writing wavefunctions [integer]
+.TRUE.		! Write the density at a defined number of time step
+10000		! Number of times step for writing density [integer]
+.TRUE.		! Write the wf Ground State projection at each time step
+.TRUE.		! Write the wf norms at each time step
+.TRUE.		! Write the wf probabilities at each time step
+.TRUE.		! Write the ionization probabilities at each time step
+.TRUE.		! Write the number of escaped electrons at each time step
+.TRUE.		! Write the wf dipoles at each time step
+.TRUE.		! Write the HHG spectrum of each dipole
+.TRUE.		! Write the general dipole (summation of all individual ones)
+.TRUE.		! Write the HHG spectrum calculated from general dipole
+.TRUE.          ! Write the cumulated absorbed energy
